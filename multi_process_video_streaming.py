@@ -23,7 +23,9 @@ import time
 def receive_data(queue):
     print('Process(%s) is receiving...' % os.getpid())
     rtsp = "rtsp://admin:bocom123456@10.20.40.205:554"
-    cap = cv2.VideoCapture(rtsp)
+    flv1 = "http://10.20.40.44:8080/realplay?DD452C8C-3AEF-4A7E-CDCC-AAF561F8328D"
+    flv2 = "http://10.20.40.44:8080/realplay?640BFDCB-0AE2-1252-B879-7B52C6A4F569"
+    cap = cv2.VideoCapture(0)
     print(cap.isOpened())
     while cap.isOpened():
         ret, img_ori = cap.read()
@@ -42,12 +44,19 @@ def process_data(queue):
     print('Process(%s) is process...' % os.getpid())
     fourcc = cv2.VideoWriter_fourcc('m', 'p', '4', 'v')
     videoWriter = cv2.VideoWriter('video_result.mp4', fourcc, 15, (1280, 720))
+    roi = [200, 35, 1100, 720]  # [left, top, right, bottom]
+    latest_num = 0
+    save_counter = 0
     while True:
+        target_num = 0
         frame = queue.get(True)
+        cv2.rectangle(frame, (roi[0], roi[1]), (roi[2], roi[3]), (255, 0, 0), 3)
         # process the image, add your business logic
         t1 = time.time()
+        # print(frame.shape)
         image = Image.fromarray(frame[..., ::-1])  # bgr to rgb
-        boxs, class_names = yolo.detect_image(image)
+        image_crop = image.crop((roi[0], roi[1], roi[2], roi[3]))
+        boxs, class_names = yolo.detect_image(image_crop)
         features = encoder(frame, boxs)
         # score to 1.0 here).
         detections = [Detection(bbox, 1.0, feature) for bbox, feature in zip(boxs, features)]
@@ -64,13 +73,16 @@ def process_data(queue):
         indexIDs = []
         for det in detections:
             bbox = det.to_tlbr()
-            cv2.rectangle(frame, (int(bbox[0]), int(bbox[1])), (int(bbox[2]), int(bbox[3])), (255, 255, 255), 2)
+            # cv2.rectangle(frame, (int(bbox[0]), int(bbox[1])), (int(bbox[2]), int(bbox[3])), (255, 255, 255), 2)
         for track in tracker.tracks:
             if not track.is_confirmed() or track.time_since_update > 1:
                 continue
+            target_num += 1
             indexIDs.append(int(track.track_id))
             counter.append(int(track.track_id))
-            bbox = track.to_tlbr()
+            bbox = track.to_tlbr()  # [left, top, right, bottom]
+            # print(bbox)
+            bbox = [bbox[0] + roi[0], bbox[1] + roi[1], bbox[2] + roi[0], bbox[3] + roi[1]]
             color = [int(c) for c in COLORS[indexIDs[i] % len(COLORS)]]
 
             cv2.rectangle(frame, (int(bbox[0]), int(bbox[1])), (int(bbox[2]), int(bbox[3])), (color), 3)
@@ -92,7 +104,10 @@ def process_data(queue):
             for j in range(1, len(pts[track.track_id])):
                 if pts[track.track_id][j - 1] is None or pts[track.track_id][j] is None:
                     continue
-
+        if latest_num != target_num:
+            cv2.imwrite("frame_" + str(save_counter) + ".jpg", frame)
+        latest_num = target_num
+        save_counter += 1
         count = len(set(counter))
         global fps
         fps = (fps + (1. / (time.time() - t1))) / 2
